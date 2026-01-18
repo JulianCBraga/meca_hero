@@ -21,7 +21,6 @@ class MecaHeroApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: const Color(0xFF050505),
-        // CORREÇÃO: Atualizado para a nova API de tema de diálogo usando DialogThemeData
         dialogTheme: DialogThemeData(
           backgroundColor: Colors.grey[900],
         ),
@@ -47,21 +46,30 @@ class Note {
 // --- CLASSE PARA A MELODIA ---
 class SongEvent {
   final int lane;
-  final double delay; // Tempo de espera desde a nota ANTERIOR (ou início)
+  final double
+      time; // Tempo absoluto (timestamp) em segundos desde o início da música
 
-  SongEvent(this.lane, this.delay);
+  SongEvent(this.lane, this.time);
 
   // Converte para Mapa (JSON) para salvar
   Map<String, dynamic> toJson() => {
         'lane': lane,
-        'delay': delay,
+        'time': time,
       };
 
   // Cria a partir de Mapa (JSON) ao carregar
   factory SongEvent.fromJson(Map<String, dynamic> json) {
+    // Suporte legado para 'delay' se necessário, mas preferência por 'time'
+    double val = 0.0;
+    if (json.containsKey('time')) {
+      val = (json['time'] as num).toDouble();
+    } else if (json.containsKey('delay')) {
+      val = (json['delay'] as num).toDouble();
+    }
+
     return SongEvent(
       json['lane'] as int,
-      (json['delay'] as num).toDouble(),
+      val,
     );
   }
 }
@@ -78,45 +86,50 @@ class _GameScreenState extends State<GameScreen>
     with SingleTickerProviderStateMixin {
   late Ticker _ticker;
 
-  // Audio Players
-  final List<AudioPlayer> _players = List.generate(7, (_) => AudioPlayer());
+  // Audio Players (Agora são 8 canais)
+  final List<AudioPlayer> _players = List.generate(8, (_) => AudioPlayer());
 
   // Estado do Jogo
   bool isPlaying = false;
   bool isDemoMode = false;
-  bool isRecording = false; // Modo de gravação
+  bool isRecording = false;
+
+  // Variável para corrigir o bug de múltiplas chamadas de fim de jogo
+  bool _isGameOverScheduled = false;
 
   int score = 0;
   int combo = 0;
   int multiplier = 1;
-  double speed = 180.0;
+  double speed = 200.0; // Velocidade
 
-  // Estado Visual dos Botões
-  List<bool> lanePressed = List.filled(7, false);
+  // Estado Visual dos Botões (8 botões)
+  List<bool> lanePressed = List.filled(8, false);
 
   // Sequenciador e Gravação
   List<Note> notes = [];
   int noteIndex = 0;
-  double timeSinceLastNote = 0.0;
 
-  // Variáveis de Gravação
-  DateTime? lastTapTime;
+  // Variáveis de Tempo
+  Duration _lastElapsed = Duration.zero;
+  DateTime? _recordingStartTime;
+
+  // Melodia gravada temporária
   List<SongEvent> recordedMelody = [];
 
-  // Cores das 7 trilhas (Arco-íris)
+  // Cores das 8 trilhas
   final List<Color> laneColors = [
-    Colors.redAccent, // Dó
-    Colors.orangeAccent, // Ré
-    Colors.yellowAccent, // Mi
-    Colors.greenAccent, // Fá
-    Colors.cyanAccent, // Sol
-    Colors.blueAccent, // Lá
-    Colors.purpleAccent, // Si
+    Colors.redAccent, // 0
+    Colors.orangeAccent, // 1
+    Colors.yellowAccent, // 2
+    Colors.greenAccent, // 3
+    Colors.cyanAccent, // 4
+    Colors.blueAccent, // 5
+    Colors.purpleAccent, // 6
+    Colors.pinkAccent, // 7
   ];
 
-  // REMOVIDO: Melodia Padrão (Agora começa vazia)
+  // Melodia Atual (Começa vazia)
   List<SongEvent> currentMelody = [];
-
   String currentSongTitle = "Nenhuma música carregada";
 
   double hitLineY = 0;
@@ -124,12 +137,10 @@ class _GameScreenState extends State<GameScreen>
   @override
   void initState() {
     super.initState();
-    _ticker = createTicker((elapsed) {
-      if (isPlaying) {
-        _gameLoop(elapsed);
-      }
-    });
+    _ticker = createTicker(_gameLoop);
     _preloadAudio();
+    // Garante que as músicas padrão existam
+    _ensureDefaultMelodies();
   }
 
   void _preloadAudio() async {
@@ -140,6 +151,210 @@ class _GameScreenState extends State<GameScreen>
         debugPrint("Erro ao configurar áudio: $e");
       }
     }
+  }
+
+  // Cria arquivos de música padrão se não existirem
+  void _ensureDefaultMelodies() async {
+    final path = await _localPath();
+
+    // Lista exata fornecida (Convertida para SongEvent)
+    final Map<String, List<SongEvent>> defaultSongs = {
+      "Doremifa": [
+        SongEvent(0, 0.00),
+        SongEvent(3, 0.30),
+        SongEvent(2, 0.60),
+        SongEvent(1, 0.90),
+        SongEvent(0, 1.20),
+        SongEvent(1, 1.50),
+        SongEvent(0, 1.80),
+        SongEvent(0, 2.10),
+        SongEvent(0, 2.70),
+        SongEvent(1, 3.00),
+        SongEvent(0, 3.30),
+        SongEvent(1, 3.60),
+        SongEvent(2, 3.90),
+        SongEvent(3, 4.20),
+        SongEvent(3, 4.50),
+        SongEvent(3, 4.80),
+        SongEvent(0, 5.10),
+        SongEvent(3, 5.40),
+        SongEvent(2, 5.70),
+        SongEvent(1, 6.00),
+        SongEvent(0, 6.30),
+        SongEvent(1, 6.60),
+        SongEvent(0, 6.90),
+        SongEvent(0, 7.50),
+        SongEvent(1, 7.80),
+        SongEvent(0, 8.10),
+        SongEvent(1, 8.40),
+        SongEvent(2, 8.70),
+        SongEvent(3, 9.00),
+        SongEvent(0, 9.30),
+        SongEvent(1, 9.60),
+        SongEvent(2, 9.90),
+        SongEvent(3, 10.20),
+        SongEvent(3, 10.50),
+        SongEvent(3, 11.10),
+        SongEvent(3, 11.70),
+        SongEvent(3, 12.00),
+        SongEvent(0, 12.60),
+        SongEvent(1, 12.90),
+        SongEvent(0, 13.20),
+        SongEvent(1, 13.50),
+        SongEvent(1, 13.80),
+        SongEvent(1, 14.40),
+        SongEvent(1, 15.00),
+        SongEvent(1, 15.30),
+        SongEvent(0, 15.60),
+        SongEvent(4, 15.90),
+        SongEvent(3, 16.20),
+        SongEvent(2, 16.50),
+        SongEvent(2, 16.80),
+        SongEvent(2, 17.40),
+        SongEvent(2, 18.00),
+        SongEvent(2, 18.30),
+        SongEvent(0, 18.60),
+        SongEvent(1, 18.90),
+        SongEvent(2, 19.20),
+        SongEvent(3, 19.50),
+        SongEvent(3, 19.80),
+        SongEvent(3, 20.40),
+        SongEvent(3, 21.00),
+        SongEvent(3, 21.30),
+        SongEvent(0, 21.60),
+        SongEvent(1, 21.90),
+        SongEvent(2, 22.20),
+        SongEvent(3, 22.50),
+        SongEvent(3, 22.80),
+        SongEvent(3, 23.40),
+        SongEvent(3, 24.00),
+        SongEvent(3, 24.30),
+        SongEvent(0, 24.60),
+        SongEvent(1, 24.90),
+        SongEvent(0, 25.20),
+        SongEvent(1, 25.50),
+        SongEvent(1, 25.80),
+        SongEvent(1, 26.40),
+        SongEvent(1, 27.00),
+        SongEvent(1, 27.30),
+        SongEvent(0, 27.60),
+        SongEvent(4, 27.90),
+        SongEvent(3, 28.20),
+        SongEvent(2, 28.50),
+        SongEvent(2, 28.80),
+        SongEvent(2, 29.40),
+        SongEvent(2, 30.00),
+        SongEvent(2, 30.30),
+        SongEvent(0, 30.60),
+        SongEvent(1, 30.90),
+        SongEvent(2, 31.20),
+        SongEvent(3, 31.50),
+        SongEvent(3, 31.80),
+        SongEvent(0, 32.10),
+        SongEvent(3, 32.40),
+        SongEvent(2, 32.70),
+        SongEvent(1, 33.00),
+        SongEvent(0, 33.30),
+        SongEvent(1, 33.60),
+        SongEvent(0, 33.90),
+        SongEvent(1, 34.20),
+        SongEvent(2, 34.50),
+        SongEvent(3, 34.80),
+        SongEvent(3, 35.10),
+        SongEvent(3, 35.40),
+        SongEvent(0, 35.70),
+        SongEvent(3, 36.00),
+        SongEvent(2, 36.30),
+        SongEvent(1, 36.60),
+        SongEvent(0, 36.90),
+        SongEvent(1, 37.20),
+        SongEvent(0, 37.50),
+        SongEvent(0, 38.10),
+        SongEvent(1, 38.40),
+        SongEvent(0, 38.70),
+        SongEvent(1, 39.00),
+        SongEvent(2, 39.30),
+        SongEvent(3, 39.60),
+        SongEvent(0, 39.90),
+        SongEvent(1, 40.20),
+        SongEvent(2, 40.50),
+        SongEvent(3, 40.80),
+        SongEvent(3, 41.10),
+        SongEvent(3, 41.70),
+        SongEvent(3, 42.30),
+        SongEvent(3, 42.60),
+        SongEvent(0, 42.90),
+        SongEvent(1, 43.20),
+        SongEvent(0, 43.50),
+        SongEvent(1, 43.80),
+        SongEvent(1, 44.10),
+        SongEvent(1, 44.70),
+        SongEvent(1, 45.30),
+        SongEvent(1, 45.60),
+        SongEvent(0, 45.90),
+        SongEvent(4, 46.20),
+        SongEvent(3, 46.50),
+        SongEvent(2, 46.80),
+        SongEvent(2, 47.10),
+        SongEvent(2, 47.70),
+        SongEvent(2, 48.30),
+        SongEvent(2, 48.60),
+        SongEvent(0, 48.90),
+        SongEvent(1, 49.20),
+        SongEvent(2, 49.50),
+        SongEvent(3, 49.80),
+        SongEvent(3, 50.10),
+        SongEvent(3, 50.70),
+        SongEvent(3, 51.30),
+        SongEvent(3, 51.60),
+        SongEvent(0, 51.90),
+        SongEvent(1, 52.20),
+        SongEvent(2, 52.50),
+        SongEvent(3, 52.80),
+        SongEvent(3, 53.10),
+        SongEvent(3, 53.70),
+        SongEvent(3, 54.30),
+        SongEvent(3, 54.60),
+        SongEvent(0, 54.90),
+        SongEvent(1, 55.20),
+        SongEvent(0, 55.50),
+        SongEvent(1, 55.80),
+        SongEvent(1, 56.10),
+        SongEvent(1, 56.70),
+        SongEvent(1, 57.30),
+        SongEvent(1, 57.60),
+        SongEvent(0, 57.90),
+        SongEvent(4, 58.20),
+        SongEvent(3, 58.50),
+        SongEvent(2, 58.80),
+        SongEvent(2, 59.10),
+        SongEvent(2, 59.70),
+        SongEvent(2, 60.30),
+        SongEvent(2, 60.60),
+        SongEvent(0, 60.90),
+        SongEvent(1, 61.20),
+        SongEvent(2, 61.50),
+        SongEvent(3, 61.80),
+        SongEvent(3, 62.10),
+        SongEvent(3, 62.70),
+        SongEvent(3, 63.30),
+        SongEvent(3, 63.60),
+        SongEvent(3, 63.90),
+        SongEvent(3, 64.20),
+      ]
+    };
+
+    defaultSongs.forEach((filename, events) async {
+      final file = File('$path/$filename.json');
+      // Tenta salvar/atualizar o arquivo sempre que inicia para garantir a versão mais recente
+      try {
+        String jsonStr = jsonEncode(events.map((e) => e.toJson()).toList());
+        await file.writeAsString(jsonStr);
+        debugPrint("Música padrão criada/atualizada: $filename");
+      } catch (e) {
+        debugPrint("Erro ao criar música padrão: $e");
+      }
+    });
   }
 
   @override
@@ -172,7 +387,6 @@ class _GameScreenState extends State<GameScreen>
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('Melodia "$filename" salva com sucesso!')));
-        // Carrega automaticamente a música salva
         setState(() {
           currentMelody = List.from(recordedMelody);
           currentSongTitle = filename;
@@ -188,8 +402,13 @@ class _GameScreenState extends State<GameScreen>
       String contents = await file.readAsString();
       List<dynamic> jsonList = jsonDecode(contents);
 
+      List<SongEvent> loaded =
+          jsonList.map((e) => SongEvent.fromJson(e)).toList();
+      // Importante: Ordena por tempo caso os dados originais estejam fora de ordem
+      loaded.sort((a, b) => a.time.compareTo(b.time));
+
       setState(() {
-        currentMelody = jsonList.map((e) => SongEvent.fromJson(e)).toList();
+        currentMelody = loaded;
         currentSongTitle = file.uri.pathSegments.last.replaceAll('.json', '');
       });
 
@@ -200,6 +419,10 @@ class _GameScreenState extends State<GameScreen>
       }
     } catch (e) {
       debugPrint("Erro ao ler: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Erro ao carregar arquivo.')));
+      }
     }
   }
 
@@ -334,15 +557,17 @@ class _GameScreenState extends State<GameScreen>
       multiplier = 1;
       notes.clear();
       noteIndex = 0;
-      timeSinceLastNote = 0.0;
+      _isGameOverScheduled = false;
 
-      lastTapTime = null;
+      _lastElapsed = Duration.zero;
+
       if (recording) {
         recordedMelody.clear();
+        _recordingStartTime = DateTime.now();
       }
 
       isPlaying = true;
-      lanePressed = List.filled(7, false);
+      lanePressed = List.filled(8, false); // 8 Notas
     });
     _ticker.start();
   }
@@ -354,7 +579,7 @@ class _GameScreenState extends State<GameScreen>
     setState(() {
       isPlaying = false;
       isRecording = false;
-      lanePressed = List.filled(7, false);
+      lanePressed = List.filled(8, false); // 8 Notas
     });
 
     if (wasRecording) {
@@ -415,22 +640,21 @@ class _GameScreenState extends State<GameScreen>
     }
   }
 
+  // --- LOOP PRINCIPAL DO JOGO ---
   void _gameLoop(Duration elapsed) {
+    if (isRecording) {
+      return;
+    }
+
     setState(() {
-      if (isRecording) {
-        return;
-      }
+      double dt = (elapsed - _lastElapsed).inMicroseconds / 1000000.0;
+      _lastElapsed = elapsed;
+      if (dt > 0.1) dt = 0.016;
 
-      double dt = 0.016;
-      timeSinceLastNote += dt;
+      double currentTime = elapsed.inMicroseconds / 1000000.0;
 
-      if (noteIndex < currentMelody.length) {
-        // CORREÇÃO: O delay deve ser o da nota atual que queremos spawnar
-        // O SongEvent.delay representa "quanto tempo esperar após o evento anterior"
-        double waitTime = currentMelody[noteIndex].delay;
-
-        // Removemos o multiplicador 0.8 para a reprodução ser fiel à gravação
-        if (timeSinceLastNote >= waitTime) {
+      while (noteIndex < currentMelody.length) {
+        if (currentMelody[noteIndex].time <= currentTime) {
           int lane = currentMelody[noteIndex].lane;
           notes.add(Note(
             lane: lane,
@@ -438,10 +662,18 @@ class _GameScreenState extends State<GameScreen>
             color: laneColors[lane],
           ));
           noteIndex++;
-          timeSinceLastNote = 0.0;
+        } else {
+          break;
         }
-      } else if (notes.isEmpty) {
-        _stopGame();
+      }
+
+      if (noteIndex >= currentMelody.length &&
+          notes.isEmpty &&
+          !_isGameOverScheduled) {
+        _isGameOverScheduled = true;
+        Future.delayed(const Duration(seconds: 2), () {
+          if (mounted && isPlaying) _stopGame();
+        });
       }
 
       double moveAmount = speed * dt;
@@ -466,38 +698,29 @@ class _GameScreenState extends State<GameScreen>
           multiplier = 1;
         }
       }
+
       notes.removeWhere((n) => n.y > hitLineY + 200);
     });
   }
 
   void _handleInput(int laneIndex) async {
-    // 1. Se estiver gravando: Toca sempre
     if (isRecording) {
       _playNoteAndAnimate(laneIndex);
 
-      DateTime now = DateTime.now();
-      double delay = 0.0;
+      if (_recordingStartTime != null) {
+        Duration diff = DateTime.now().difference(_recordingStartTime!);
+        double timeSeconds = diff.inMilliseconds / 1000.0;
 
-      if (lastTapTime != null) {
-        delay = now.difference(lastTapTime!).inMilliseconds / 1000.0;
+        recordedMelody.add(SongEvent(laneIndex, timeSeconds));
       }
-
-      // Delay inicial para a primeira nota
-      if (recordedMelody.isEmpty) delay = 1.0;
-
-      recordedMelody.add(SongEvent(laneIndex, delay));
-      lastTapTime = now;
       return;
     }
 
     if (!isPlaying) return;
     if (isDemoMode) return;
 
-    // REMOVIDO: O som tocava imediatamente aqui.
-    // Agora só toca se acertar uma nota no bloco abaixo.
-    // _playNoteAndAnimate(laneIndex);
-
     double hitWindow = 70.0;
+
     var candidates = notes
         .where((n) =>
             n.lane == laneIndex &&
@@ -511,7 +734,6 @@ class _GameScreenState extends State<GameScreen>
           (a, b) => (a.y - hitLineY).abs().compareTo((b.y - hitLineY).abs()));
       var note = candidates.first;
 
-      // ADICIONADO: Toca som e anima APENAS se acertar
       _playNoteAndAnimate(laneIndex);
 
       setState(() {
@@ -541,7 +763,7 @@ class _GameScreenState extends State<GameScreen>
             child: CustomPaint(
               painter: GamePainter(
                 notes: notes,
-                laneCount: 7,
+                laneCount: 8, // 8 Notas
                 hitY: hitLineY,
                 laneColors: laneColors,
               ),
@@ -607,7 +829,8 @@ class _GameScreenState extends State<GameScreen>
               child: Center(
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
-                  children: List.generate(7, (index) {
+                  children: List.generate(8, (index) {
+                    // 8 Notas
                     return _buildFretButton(index, size.width);
                   }),
                 ),
@@ -722,7 +945,7 @@ class _GameScreenState extends State<GameScreen>
   }
 
   Widget _buildFretButton(int index, double screenWidth) {
-    double btnWidth = (screenWidth / 7) - 4;
+    double btnWidth = (screenWidth / 8) - 4; // Ajuste para 8
     bool isPressed = lanePressed[index];
 
     return GestureDetector(
